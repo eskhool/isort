@@ -1066,6 +1066,26 @@ def test_force_single_line_long_imports() -> None:
     )
 
 
+def test_force_single_line_imports_and_sort_within_sections() -> None:
+    test_input = (
+        "from third_party import lib_a, lib_b, lib_d\n"
+        "from third_party.lib_c import lib1\n"
+    )
+    test_output = SortImports(
+        file_contents=test_input,
+        multi_line_output=WrapModes.GRID,
+        line_length=40,
+        force_single_line=True,
+        force_sort_within_sections=True,
+    ).output
+    assert test_output == (
+        "from third_party import lib_a\n"
+        "from third_party import lib_b\n"
+        "from third_party.lib_c import lib1\n"
+        "from third_party import lib_d\n"
+    )
+
+
 def test_titled_imports() -> None:
     """Tests setting custom titled/commented import sections."""
     test_input = (
@@ -1522,6 +1542,26 @@ def test_include_trailing_comma() -> None:
     assert test_output_wrap_single_import_vertical_indent == (
         "from third_party import (\n    lib1,\n)\n"
     )
+
+    trailing_comma_with_comment = "from six.moves.urllib.parse import urlencode  # pylint: disable=no-name-in-module,import-error"
+    expected_trailing_comma_with_comment = "from six.moves.urllib.parse import (\n    urlencode,  # pylint: disable=no-name-in-module,import-error\n)\n"
+    trailing_comma_with_comment = SortImports(
+        file_contents=trailing_comma_with_comment,
+        line_length=80,
+        multi_line_output=WrapModes.VERTICAL_HANGING_INDENT,
+        include_trailing_comma=True,
+        use_parentheses=True,
+    ).output
+    assert trailing_comma_with_comment == expected_trailing_comma_with_comment
+    # The next time around, it should be equal
+    trailing_comma_with_comment = SortImports(
+        file_contents=trailing_comma_with_comment,
+        line_length=80,
+        multi_line_output=WrapModes.VERTICAL_HANGING_INDENT,
+        include_trailing_comma=True,
+        use_parentheses=True,
+    ).output
+    assert trailing_comma_with_comment == expected_trailing_comma_with_comment
 
 
 def test_similar_to_std_library() -> None:
@@ -2029,6 +2069,28 @@ def test_other_file_encodings(tmpdir) -> None:
             SortImports(file_path=str(tmp_fname), settings_path=os.getcwd()).output
             == file_contents
         )
+
+
+def test_encoding_not_in_comment(tmpdir) -> None:
+    """Test that 'encoding' not in a comment is ignored"""
+    tmp_fname = tmpdir.join("test_encoding.py")
+    file_contents = "class Foo\n    coding: latin1\n\ns = u'ã'\n".format("utf8")
+    tmp_fname.write_binary(file_contents.encode("utf8"))
+    assert (
+        SortImports(file_path=str(tmp_fname), settings_path=os.getcwd()).output
+        == file_contents
+    )
+
+
+def test_encoding_not_in_first_two_lines(tmpdir) -> None:
+    """Test that 'encoding' not in the first two lines is ignored"""
+    tmp_fname = tmpdir.join("test_encoding.py")
+    file_contents = "\n\n# -*- coding: latin1\n\ns = u'ã'\n".format("utf8")
+    tmp_fname.write_binary(file_contents.encode("utf8"))
+    assert (
+        SortImports(file_path=str(tmp_fname), settings_path=os.getcwd()).output
+        == file_contents
+    )
 
 
 def test_comment_at_top_of_file() -> None:
@@ -4222,6 +4284,25 @@ def test_isort_ensures_blank_line_between_import_and_comment() -> None:
     assert SortImports(file_contents=test_input, **config).output == expected_output
 
 
+def test_moving_comments_issue_726():
+    config = {"force_sort_within_sections": 1}  # type: Dict[str, Any]
+    test_input = (
+        "import Blue.models as BlueModels\n"
+        "# comment for PlaidModel\n"
+        "from Plaid.models import PlaidModel\n"
+    )
+    assert SortImports(file_contents=test_input, **config).output == test_input
+
+    test_input = (
+        "# comment for BlueModels\n"
+        "import Blue.models as BlueModels\n"
+        "# comment for PlaidModel\n"
+        "# another comment for PlaidModel\n"
+        "from Plaid.models import PlaidModel\n"
+    )
+    assert SortImports(file_contents=test_input, **config).output == test_input
+
+
 def test_pyi_formatting_issue_942(tmpdir) -> None:
     test_input = "import os\n\n\ndef my_method():\n"
     expected_py_output = test_input.splitlines()
@@ -4248,6 +4329,31 @@ def test_pyi_formatting_issue_942(tmpdir) -> None:
     )
 
 
+def test_move_class_issue_751() -> None:
+    test_input = (
+        "# -*- coding: utf-8 -*-"
+        "\n"
+        "# Define your item pipelines here"
+        "#"
+        "# Don't forget to add your pipeline to the ITEM_PIPELINES setting"
+        "# See: https://doc.scrapy.org/en/latest/topics/item-pipeline.html"
+        "from datetime import datetime"
+        "from .items import WeiboMblogItem"
+        "\n"
+        "class WeiboMblogPipeline(object):"
+        "    def process_item(self, item, spider):"
+        "        if isinstance(item, WeiboMblogItem):"
+        "            item = self._process_item(item, spider)"
+        "        return item"
+        "\n"
+        "    def _process_item(self, item, spider):"
+        "        item['inserted_at'] = datetime.now()"
+        "        return item"
+        "\n"
+    )
+    assert SortImports(file_contents=test_input).output == test_input
+
+
 def test_python_version() -> None:
     from isort.main import parse_args
 
@@ -4271,3 +4377,12 @@ def test_python_version() -> None:
     test_input = "import os\nimport xml"
 
     print(SortImports(file_contents=test_input, py_version="all").output)
+
+
+def test_isort_with_single_character_import() -> None:
+    """Tests to ensure isort handles single capatilized single character imports as class objects by default
+
+    See Issue #376: https://github.com/timothycrosley/isort/issues/376
+    """
+    test_input = "from django.db.models import CASCADE, SET_NULL, Q\n"
+    assert SortImports(file_contents=test_input).output == test_input
