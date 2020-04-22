@@ -1,31 +1,13 @@
-"""isort.py.
-
-Defines a git hook to allow pre-commit warnings and errors about import order.
+"""Defines a git hook to allow pre-commit warnings and errors about import order.
 
 usage:
     exit_code = git_hook(strict=True|False, modify=True|False)
-
-Copyright (C) 2015  Helen Sherwood-Taylor
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the Software without restriction, including without limitation
-the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and
-to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or
-substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL
-THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
-CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-OTHER DEALINGS IN THE SOFTWARE.
-
 """
-import subprocess
+import subprocess  # nosec - Needed for hook
+from pathlib import Path
 from typing import List
 
-from isort import SortImports
+from isort import api
 
 
 def get_output(command: List[str]) -> str:
@@ -35,7 +17,7 @@ def get_output(command: List[str]) -> str:
     :param str command: the command to run
     :returns: the stdout output of the command
     """
-    result = subprocess.run(command, stdout=subprocess.PIPE, check=True)
+    result = subprocess.run(command, stdout=subprocess.PIPE, check=True)  # nosec - trusted input
     return result.stdout.decode()
 
 
@@ -65,13 +47,7 @@ def git_hook(strict: bool = False, modify: bool = False) -> int:
     """
 
     # Get list of files modified and staged
-    diff_cmd = [
-        "git",
-        "diff-index",
-        "--cached",
-        "--name-only",
-        "--diff-filter=ACMRTUXB HEAD",
-    ]
+    diff_cmd = ["git", "diff-index", "--cached", "--name-only", "--diff-filter=ACMRTUXB HEAD"]
     files_modified = get_lines(diff_cmd)
 
     errors = 0
@@ -81,15 +57,11 @@ def git_hook(strict: bool = False, modify: bool = False) -> int:
             staged_cmd = ["git", "show", ":%s" % filename]
             staged_contents = get_output(staged_cmd)
 
-            sort = SortImports(
-                file_path=filename, file_contents=staged_contents, check=True
-            )
-
-            if sort.incorrectly_sorted:
+            if not (
+                api.sort_file(filename)
+                if modify
+                else api.check_code_string(staged_contents, file_path=Path(filename))
+            ):
                 errors += 1
-                if modify:
-                    SortImports(
-                        file_path=filename, file_contents=staged_contents, check=False
-                    )
 
     return errors if strict else 0

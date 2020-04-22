@@ -5,7 +5,7 @@ DO NOT EDIT. If the standard library changes, a new list should be created
 using the mkstdlibs.py script.
 """
 
-stdlib = [
+stdlib = {
     "AL",
     "BaseHTTPServer",
     "Bastion",
@@ -291,4 +291,4 @@ stdlib = [
     "zipfile",
     "zipimport",
     "zlib",
-]
+}

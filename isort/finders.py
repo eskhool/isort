@@ -1,5 +1,5 @@
-"""Finders try to find right section for passed module name
-"""
+"""Finders try to find right section for passed module name"""
+import importlib.machinery
 import inspect
 import os
 import os.path
@@ -10,49 +10,41 @@ from abc import ABCMeta, abstractmethod
 from fnmatch import fnmatch
 from functools import lru_cache
 from glob import glob
-from typing import (
-    Any,
-    Dict,
-    Iterable,
-    Iterator,
-    List,
-    Mapping,
-    Optional,
-    Pattern,
-    Sequence,
-    Tuple,
-    Type,
-)
+from typing import Dict, Iterable, Iterator, List, Optional, Pattern, Sequence, Tuple, Type
 
+from . import sections
+from .settings import Config
 from .utils import chdir, exists_case_sensitive
 
 try:
     from pipreqs import pipreqs
+
 except ImportError:
     pipreqs = None
 
 try:
     from pip_api import parse_requirements
+
 except ImportError:
     parse_requirements = None
 
 try:
     from requirementslib import Pipfile
+
 except ImportError:
     Pipfile = None
 
-KNOWN_SECTION_MAPPING = {
-    "STDLIB": "STANDARD_LIBRARY",
-    "FUTURE": "FUTURE_LIBRARY",
-    "FIRSTPARTY": "FIRST_PARTY",
-    "THIRDPARTY": "THIRD_PARTY",
+KNOWN_SECTION_MAPPING: Dict[str, str] = {
+    sections.STDLIB: "STANDARD_LIBRARY",
+    sections.FUTURE: "FUTURE_LIBRARY",
+    sections.FIRSTPARTY: "FIRST_PARTY",
+    sections.THIRDPARTY: "THIRD_PARTY",
 }
 
 
 class BaseFinder(metaclass=ABCMeta):
-    def __init__(self, config: Mapping[str, Any], sections: Any) -> None:
+    def __init__(self, config: Config) -> None:
         self.config = config
-        self.sections = sections
 
     @abstractmethod
     def find(self, module_name: str) -> Optional[str]:
@@ -61,7 +53,7 @@ class BaseFinder(metaclass=ABCMeta):
 
 class ForcedSeparateFinder(BaseFinder):
     def find(self, module_name: str) -> Optional[str]:
-        for forced_separate in self.config["forced_separate"]:
+        for forced_separate in self.config.forced_separate:
             # Ensure all forced_separate patterns will match to end of string
             path_glob = forced_separate
             if not forced_separate.endswith("*"):
@@ -75,19 +67,21 @@ class ForcedSeparateFinder(BaseFinder):
 class LocalFinder(BaseFinder):
     def find(self, module_name: str) -> Optional[str]:
         if module_name.startswith("."):
-            return self.sections.LOCALFOLDER
+            return "LOCALFOLDER"
         return None
 
 
 class KnownPatternFinder(BaseFinder):
-    def __init__(self, config: Mapping[str, Any], sections: Any) -> None:
-        super().__init__(config, sections)
+    def __init__(self, config: Config) -> None:
+        super().__init__(config)
 
-        self.known_patterns = []  # type: List[Tuple[Pattern[str], str]]
-        for placement in reversed(self.sections):
-            known_placement = KNOWN_SECTION_MAPPING.get(placement, placement)
-            config_key = "known_{}".format(known_placement.lower())
-            known_patterns = self.config.get(config_key, [])
+        self.known_patterns: List[Tuple[Pattern[str], str]] = []
+        for placement in reversed(config.sections):
+            known_placement = KNOWN_SECTION_MAPPING.get(placement, placement).lower()
+            config_key = f"known_{known_placement}"
+            known_patterns = list(
+                getattr(self.config, config_key, self.config.known_other.get(known_placement, []))
+            )
             known_patterns = [
                 pattern
                 for known_pattern in known_patterns
@@ -98,9 +92,7 @@ class KnownPatternFinder(BaseFinder):
                 self.known_patterns.append((re.compile(regexp), placement))
 
     def _parse_known_pattern(self, pattern: str) -> List[str]:
-        """
-        Expand pattern if identified as a directory and return found sub packages
-        """
+        """Expand pattern if identified as a directory and return found sub packages"""
         if pattern.endswith(os.path.sep):
             patterns = [
                 filename
@@ -115,9 +107,7 @@ class KnownPatternFinder(BaseFinder):
     def find(self, module_name: str) -> Optional[str]:
         # Try to find most specific placement instruction match (if any)
         parts = module_name.split(".")
-        module_names_to_check = (
-            ".".join(parts[:first_k]) for first_k in range(len(parts), 0, -1)
-        )
+        module_names_to_check = (".".join(parts[:first_k]) for first_k in range(len(parts), 0, -1))
         for module_name_to_check in module_names_to_check:
             for pattern, placement in self.known_patterns:
                 if pattern.match(module_name_to_check):
@@ -126,43 +116,39 @@ class KnownPatternFinder(BaseFinder):
 
 
 class PathFinder(BaseFinder):
-    def __init__(self, config: Mapping[str, Any], sections: Any) -> None:
-        super().__init__(config, sections)
+    def __init__(self, config: Config) -> None:
+        super().__init__(config)
 
         # restore the original import path (i.e. not the path to bin/isort)
         root_dir = os.getcwd()
-        src_dir = "{0}/src".format(root_dir)
+        src_dir = f"{root_dir}/src"
         self.paths = [root_dir, src_dir]
 
         # virtual env
-        self.virtual_env = self.config.get("virtual_env") or os.environ.get(
-            "VIRTUAL_ENV"
-        )
+        self.virtual_env = self.config.virtual_env or os.environ.get("VIRTUAL_ENV")
         if self.virtual_env:
             self.virtual_env = os.path.realpath(self.virtual_env)
         self.virtual_env_src = ""
         if self.virtual_env:
-            self.virtual_env_src = "{}/src/".format(self.virtual_env)
-            for path in glob("{}/lib/python*/site-packages".format(self.virtual_env)):
+            self.virtual_env_src = f"{self.virtual_env}/src/"
+            for path in glob(f"{self.virtual_env}/lib/python*/site-packages"):
                 if path not in self.paths:
                     self.paths.append(path)
-            for path in glob("{}/lib/python*/*/site-packages".format(self.virtual_env)):
+            for path in glob(f"{self.virtual_env}/lib/python*/*/site-packages"):
                 if path not in self.paths:
                     self.paths.append(path)
-            for path in glob("{}/src/*".format(self.virtual_env)):
+            for path in glob(f"{self.virtual_env}/src/*"):
                 if os.path.isdir(path):
                     self.paths.append(path)
 
         # conda
-        self.conda_env = (
-            self.config.get("conda_env") or os.environ.get("CONDA_PREFIX") or ""
-        )
+        self.conda_env = self.config.conda_env or os.environ.get("CONDA_PREFIX") or ""
         if self.conda_env:
             self.conda_env = os.path.realpath(self.conda_env)
-            for path in glob("{}/lib/python*/site-packages".format(self.conda_env)):
+            for path in glob(f"{self.conda_env}/lib/python*/site-packages"):
                 if path not in self.paths:
                     self.paths.append(path)
-            for path in glob("{}/lib/python*/*/site-packages".format(self.conda_env)):
+            for path in glob(f"{self.conda_env}/lib/python*/*/site-packages"):
                 if path not in self.paths:
                     self.paths.append(path)
 
@@ -170,9 +156,6 @@ class PathFinder(BaseFinder):
         self.stdlib_lib_prefix = os.path.normcase(sysconfig.get_paths()["stdlib"])
         if self.stdlib_lib_prefix not in self.paths:
             self.paths.append(self.stdlib_lib_prefix)
-
-        # handle compiled libraries
-        self.ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ".so"
 
         # add system paths
         for path in sys.path[1:]:
@@ -184,35 +167,35 @@ class PathFinder(BaseFinder):
             package_path = "/".join((prefix, module_name.split(".")[0]))
             is_module = (
                 exists_case_sensitive(package_path + ".py")
-                or exists_case_sensitive(package_path + ".so")
-                or exists_case_sensitive(package_path + self.ext_suffix)
+                or any(
+                    exists_case_sensitive(package_path + ext_suffix)
+                    for ext_suffix in importlib.machinery.EXTENSION_SUFFIXES
+                )
                 or exists_case_sensitive(package_path + "/__init__.py")
             )
-            is_package = exists_case_sensitive(package_path) and os.path.isdir(
-                package_path
-            )
+            is_package = exists_case_sensitive(package_path) and os.path.isdir(package_path)
             if is_module or is_package:
                 if "site-packages" in prefix:
-                    return self.sections.THIRDPARTY
+                    return sections.THIRDPARTY
                 if "dist-packages" in prefix:
-                    return self.sections.THIRDPARTY
+                    return sections.THIRDPARTY
                 if self.virtual_env and self.virtual_env_src in prefix:
-                    return self.sections.THIRDPARTY
+                    return sections.THIRDPARTY
+                if os.path.normcase(prefix) == self.stdlib_lib_prefix:
+                    return sections.STDLIB
                 if self.conda_env and self.conda_env in prefix:
-                    return self.sections.THIRDPARTY
+                    return sections.THIRDPARTY
                 if os.path.normcase(prefix).startswith(self.stdlib_lib_prefix):
-                    return self.sections.STDLIB
-                return self.config["default_section"]
+                    return sections.STDLIB
+                return self.config.default_section
         return None
 
 
 class ReqsBaseFinder(BaseFinder):
     enabled = False
 
-    def __init__(
-        self, config: Mapping[str, Any], sections: Any, path: str = "."
-    ) -> None:
-        super().__init__(config, sections)
+    def __init__(self, config: Config, path: str = ".") -> None:
+        super().__init__(config)
         self.path = path
         if self.enabled:
             self.mapping = self._load_mapping()
@@ -238,8 +221,7 @@ class ReqsBaseFinder(BaseFinder):
         path = os.path.dirname(inspect.getfile(pipreqs))
         path = os.path.join(path, "mapping")
         with open(path) as f:
-            # pypi_name: import_name
-            mappings = {}  # type: Dict[str, str]
+            mappings: Dict[str, str] = {}  # pypi_name: import_name
             for line in f:
                 import_name, _, pypi_name = line.strip().partition(":")
                 mappings[pypi_name] = import_name
@@ -247,8 +229,7 @@ class ReqsBaseFinder(BaseFinder):
             # return dict(tuple(line.strip().split(":")[::-1]) for line in f)
 
     def _load_names(self) -> List[str]:
-        """Return list of thirdparty modules from requirements
-        """
+        """Return list of thirdparty modules from requirements"""
         names = []
         for path in self._get_files():
             for name in self._get_names(path):
@@ -264,8 +245,7 @@ class ReqsBaseFinder(BaseFinder):
             path = os.path.dirname(path)
 
     def _get_files(self) -> Iterator[str]:
-        """Return paths to all requirements files
-        """
+        """Return paths to all requirements files"""
         path = os.path.abspath(self.path)
         if os.path.isfile(path):
             path = os.path.dirname(path)
@@ -297,7 +277,7 @@ class ReqsBaseFinder(BaseFinder):
 
         for name in self.names:
             if module_name == name:
-                return self.sections.THIRDPARTY
+                return sections.THIRDPARTY
         return None
 
 
@@ -306,8 +286,7 @@ class RequirementsFinder(ReqsBaseFinder):
     enabled = bool(parse_requirements)
 
     def _get_files_from_dir(self, path: str) -> Iterator[str]:
-        """Return paths to requirements files from passed dir.
-        """
+        """Return paths to requirements files from passed dir."""
         yield from self._get_files_from_dir_cached(path)
 
     @classmethod
@@ -338,8 +317,7 @@ class RequirementsFinder(ReqsBaseFinder):
         return results
 
     def _get_names(self, path: str) -> Iterator[str]:
-        """Load required packages from path to requirements file
-        """
+        """Load required packages from path to requirements file"""
         yield from self._get_names_cached(path)
 
     @classmethod
@@ -372,11 +350,11 @@ class PipfileFinder(ReqsBaseFinder):
 
 class DefaultFinder(BaseFinder):
     def find(self, module_name: str) -> Optional[str]:
-        return self.config["default_section"]
+        return self.config.default_section
 
 
 class FindersManager:
-    _default_finders_classes = (
+    _default_finders_classes: Sequence[Type[BaseFinder]] = (
         ForcedSeparateFinder,
         LocalFinder,
         KnownPatternFinder,
@@ -384,43 +362,41 @@ class FindersManager:
         PipfileFinder,
         RequirementsFinder,
         DefaultFinder,
-    )  # type: Sequence[Type[BaseFinder]]
+    )
 
     def __init__(
-        self,
-        config: Mapping[str, Any],
-        sections: Any,
-        finder_classes: Optional[Iterable[Type[BaseFinder]]] = None,
+        self, config: Config, finder_classes: Optional[Iterable[Type[BaseFinder]]] = None
     ) -> None:
-        self.verbose = config.get("verbose", False)  # type: bool
+        self.verbose: bool = config.verbose
 
         if finder_classes is None:
             finder_classes = self._default_finders_classes
-        finders = []  # type: List[BaseFinder]
+        finders: List[BaseFinder] = []
         for finder_cls in finder_classes:
             try:
-                finders.append(finder_cls(config, sections))
+                finders.append(finder_cls(config))
             except Exception as exception:
                 # if one finder fails to instantiate isort can continue using the rest
                 if self.verbose:
                     print(
-                        "{} encountered an error ({}) during instantiation and cannot be used".format(
-                            finder_cls.__name__, str(exception)
+                        (
+                            f"{finder_cls.__name__} encountered an error ({exception}) during "
+                            "instantiation and cannot be used"
                         )
                     )
-        self.finders = tuple(finders)  # type: Tuple[BaseFinder, ...]
+        self.finders: Tuple[BaseFinder, ...] = tuple(finders)
 
     def find(self, module_name: str) -> Optional[str]:
         for finder in self.finders:
             try:
                 section = finder.find(module_name)
             except Exception as exception:
-                # isort has to be able to keep trying to identify the correct import section even if one approach fails
+                # isort has to be able to keep trying to identify the correct
+                # import section even if one approach fails
                 if self.verbose:
                     print(
-                        "{} encountered an error ({}) while trying to identify the {} module".format(
-                            finder.__class__.__name__, str(exception), module_name
-                        )
+                        f"{finder.__class__.__name__} encountered an error ({exception}) while "
+                        f"trying to identify the {module_name} module"
                     )
             if section is not None:
                 return section

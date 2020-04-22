@@ -3,12 +3,28 @@ Changelog
 
 ### 5.0.0 UNRELEASED
 **Breaking changes:**
-  - isort now requires Python 3.5+ to run but continues to support formatting
+  - isort now requires Python 3.6+ to run but continues to support formatting on ALL versions of python including
     Python 2 code.
   - isort deprecates official support for Python 3.4, removing modules only in this release from known_standard_library:
       - user
+  - Config files are no longer composed on-top of each-other. Instead the first config file found is used.
+    - Since there is no longer composition negative form settings (such as --dont-skip) are no longer required and have been removed.
+  - Two-letter shortened setting names (like `ac` for `atomic`) now require two dashes to avoid ambiguity: `--ac`.
+  - For consistency with other tools `-v` now is shorthand for verbose and `-V` is shorthand for version. See Issue: #1067.
+  - `length_sort_{section_name}` config usage has been deprecated. Instead `length_sort_sections` list can be used to specify a list of sections that need to be length sorted.
+  - `safety_excludes` and `unsafe` have been deprecated
+  - Config now includes as default full set of safety directories defined by safety excludes.
+  - `--recursive` option has been removed. Directories passed in are now automatically sorted recursive.
+  - `--apply` option has been removed as it is the default behaviour.
+  - isort now does nothing, beyond giving instructions and exiting status code 0, when ran with no arguments.
+    - a new `--interactive` flag has been added to enable the old style behaviour.
+  - isort now works on contiguous sections of imports, instead of one whole file at a time.
+  - isort now formats all nested "as" imports in the "from" form. `import x.y as a` becomes `from x import y as a`.
+  - `keep_direct_and_as_imports` option now defaults to `True`.
+
 Internal:
-  - isort now utilizes mypy and typing to filter out typing related issues before deployment
+  - isort now utilizes mypy and typing to filter out typing related issues before deployment.
+  - isort now utilizes black internally to ensure more consistent formatting.
 
 Planned:
   - profile support for common project types (black, django, google, etc)
